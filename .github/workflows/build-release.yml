@@ -1,0 +1,81 @@
+name: 🚀 Build and Release
+
+# Se ejecuta automáticamente cuando:
+# - Haces push a la rama main
+# - Creas un nuevo tag (ej: v1.0.0)
+# - O lo ejecutas manualmente desde GitHub
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  workflow_dispatch: # Permite ejecución manual
+
+jobs:
+  build:
+    name: 🔨 Compilar Ejecutable Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: 📥 Descargar código
+        uses: actions/checkout@v4
+
+      - name: 🐍 Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 🔨 Compilar con PyInstaller
+        run: |
+          pyinstaller DescargadorMusica.spec
+
+      - name: 📋 Verificar ejecutable
+        run: |
+          if (Test-Path "dist/DescargadorMusica.exe") {
+            Write-Host "✅ Ejecutable creado exitosamente"
+            $size = (Get-Item "dist/DescargadorMusica.exe").Length / 1MB
+            Write-Host "📦 Tamaño: $([math]::Round($size, 2)) MB"
+          } else {
+            Write-Host "❌ Error: No se encontró el ejecutable"
+            exit 1
+          }
+
+      - name: 📤 Subir ejecutable como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: DescargadorMusica-Windows
+          path: dist/DescargadorMusica.exe
+          if-no-files-found: error
+
+      # Este paso solo se ejecuta si haces push de un tag (ej: v1.0.0)
+      - name: 🎉 Crear Release en GitHub
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/DescargadorMusica.exe
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## 🎵 Descargador de Música YouTube
+
+            ### ⬇️ Descarga
+            Descarga el archivo `DescargadorMusica.exe` y ejecútalo directamente.
+
+            ### ✨ Características
+            - Descarga música en MP3 (solo audio)
+            - Descarga videos en MP4 (video completo)
+            - Interfaz simple e intuitiva
+            - Instalación automática de FFmpeg
+
+            ### 📝 Cambios en esta versión
+            Ver detalles abajo ⬇️
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
