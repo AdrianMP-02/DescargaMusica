@@ -1,12 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_data_files
+
+# Recopilar archivos de datos de imageio-ffmpeg (incluye los binarios FFmpeg)
+datas = collect_data_files('imageio_ffmpeg')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=datas,
+    hiddenimports=['imageio_ffmpeg'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

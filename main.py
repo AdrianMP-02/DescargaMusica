@@ -16,7 +16,7 @@ try:
     UPDATER_AVAILABLE = True
 except ImportError:
     UPDATER_AVAILABLE = False
-    CURRENT_VERSION = "1.0.0"
+    CURRENT_VERSION = "1.0"
 
 class YouTubeMusicDownloader:
     def __init__(self, root):

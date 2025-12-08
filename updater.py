@@ -18,9 +18,9 @@ from pathlib import Path
 
 
 # Configuración del repositorio
-REPO_OWNER = "TU_USUARIO_GITHUB"  # ⚠️ CAMBIAR por tu usuario de GitHub
+REPO_OWNER = "AdrianMP-02"  # ⚠️ CAMBIAR por tu usuario de GitHub
 REPO_NAME = "DescargaMusica"      # ⚠️ CAMBIAR por el nombre de tu repositorio
-CURRENT_VERSION = "1.0.0"         # ⚠️ CAMBIAR cuando publiques nuevas versiones
+CURRENT_VERSION = "0.1"         # ⚠️ CAMBIAR cuando publiques nuevas versiones
 
 
 class UpdateChecker:

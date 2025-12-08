@@ -69,25 +69,30 @@ crear_ejecutable.bat
 
 ## Crear Ejecutable (Opcional)
 
-Para crear un archivo ejecutable independiente:
+Para crear un archivo ejecutable 100% independiente que incluye FFmpeg:
 
-### Instalar PyInstaller
+### Usando el script batch (Recomendado)
 
 ```bash
+crear_ejecutable.bat
+```
+
+### Manualmente con PyInstaller
+
+```bash
+# 1. Instalar PyInstaller
 pip install pyinstaller
+
+# 2. Compilar usando el archivo .spec (incluye FFmpeg automáticamente)
+python -m PyInstaller --clean DescargadorMusica.spec
 ```
 
-### Crear ejecutable
+El ejecutable se creará en la carpeta `dist/` con las siguientes características:
 
-```bash
-# Ejecutable simple
-pyinstaller --onefile --windowed main.py
-
-# Ejecutable con icono personalizado (opcional)
-pyinstaller --onefile --windowed --icon=assets/icon.ico main.py
-```
-
-El ejecutable se creará en la carpeta `dist/`.
+✅ **Totalmente autónomo** - No requiere Python instalado
+✅ **Incluye FFmpeg** - Convierte a MP3 sin dependencias externas  
+✅ **Tamaño ~77 MB** - Todo empaquetado en un solo archivo
+✅ **Portable** - Funciona en cualquier PC Windows sin instalación
 
 ## Estructura del Proyecto
 
