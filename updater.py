@@ -25,7 +25,7 @@ from pathlib import Path
 # ============================================================
 REPO_OWNER = "AdrianMP-02"
 REPO_NAME = "DescargaMusica"
-CURRENT_VERSION = "1.2"  # Versión semántica de la app
+CURRENT_VERSION = "1.0"  # Versión semántica de la app
 
 
 class YtDlpUpdater:
@@ -203,7 +203,7 @@ class UpdateChecker:
     # ----------------------------------------------------------
     def download_update(self, download_url, progress_callback=None):
         """
-        Descarga la actualización.
+        Descarga la actualización con verificación de integridad.
 
         Args:
             download_url: URL del ejecutable o zip
@@ -216,23 +216,24 @@ class UpdateChecker:
             temp_dir = Path.home() / "AppData" / "Local" / "Temp" / "DescargadorMusica"
             temp_dir.mkdir(parents=True, exist_ok=True)
 
+            # Limpiar descargas previas fallidas
+            for old_file in temp_dir.glob("DescargadorMusica_new.*"):
+                try:
+                    old_file.unlink()
+                except OSError:
+                    pass
+
             # Determinar extensión
             if download_url.endswith(".exe"):
                 temp_file = temp_dir / "DescargadorMusica_new.exe"
             else:
                 temp_file = temp_dir / "DescargadorMusica_update.zip"
 
-            def report_progress(block_num, block_size, total_size):
-                if progress_callback and total_size > 0:
-                    downloaded = block_num * block_size
-                    percent = min(100, (downloaded * 100) / total_size)
-                    progress_callback(percent, downloaded, total_size)
-
             req = urllib.request.Request(
                 download_url,
                 headers={"User-Agent": "DescargadorMusica-AutoUpdater"},
             )
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=120) as response:
                 total_size = int(response.headers.get("Content-Length", 0))
                 downloaded = 0
                 block_size = 8192
@@ -247,6 +248,20 @@ class UpdateChecker:
                             percent = min(100, (downloaded * 100) / total_size)
                             progress_callback(percent, downloaded, total_size)
 
+            # Verificar descarga completa
+            actual_size = temp_file.stat().st_size
+            if total_size > 0 and actual_size != total_size:
+                print(f"Error: descarga incompleta ({actual_size}/{total_size} bytes)")
+                temp_file.unlink(missing_ok=True)
+                return None
+
+            # Verificar tamaño mínimo para .exe (>1MB)
+            if download_url.endswith(".exe") and actual_size < 1_000_000:
+                print(f"Error: ejecutable descargado demasiado pequeño ({actual_size} bytes)")
+                temp_file.unlink(missing_ok=True)
+                return None
+
+            print(f"Descarga completada: {actual_size} bytes en {temp_file}")
             return str(temp_file)
 
         except Exception as e:
@@ -276,24 +291,110 @@ class UpdateChecker:
             return False
 
     def _install_exe_update(self, update_file):
-        """Instala actualización en modo ejecutable (.exe)"""
+        """Instala actualización en modo ejecutable (.exe) con backup y rollback"""
         current_exe = sys.executable
-        updater_script = Path(update_file).parent / "do_update.bat"
+        update_dir = Path(update_file).parent
+        updater_script = update_dir / "do_update.bat"
+        log_file = update_dir / "update_log.txt"
+        backup_exe = update_dir / "DescargadorMusica_backup.exe"
+
+        # Verificar que el archivo descargado existe y tiene tamaño razonable (>1MB)
+        update_path = Path(update_file)
+        if not update_path.exists():
+            print("Error: archivo de actualización no encontrado")
+            return False
+
+        file_size = update_path.stat().st_size
+        if file_size < 1_000_000:  # Menor a 1MB = probablemente corrupto
+            print(f"Error: archivo de actualización muy pequeño ({file_size} bytes)")
+            try:
+                update_path.unlink()
+            except OSError:
+                pass
+            return False
 
         with open(updater_script, "w", encoding="utf-8") as f:
             f.write(f"""@echo off
 chcp 65001 >nul
-echo Actualizando Descargador de Musica...
-timeout /t 3 /nobreak >nul
+set "LOG={log_file}"
+set "CURRENT={current_exe}"
+set "NEW={update_file}"
+set "BACKUP={backup_exe}"
 
-echo Reemplazando ejecutable...
-move /Y "{update_file}" "{current_exe}"
+echo [%date% %time%] Iniciando actualizacion... > "%LOG%"
 
-echo Reiniciando aplicacion...
-start "" "{current_exe}"
+:: Esperar a que la app se cierre
+echo Esperando cierre de la aplicacion...
+echo [%date% %time%] Esperando cierre de app... >> "%LOG%"
+timeout /t 4 /nobreak >nul
 
-echo Limpiando archivos temporales...
+:: Intentar hasta 10 veces (por si tarda en cerrarse)
+set RETRY=0
+:WAIT_LOOP
+tasklist /FI "PID eq {os.getpid()}" 2>nul | find /I "DescargadorMusica" >nul
+if %ERRORLEVEL%==0 (
+    set /A RETRY+=1
+    if %RETRY% GEQ 10 (
+        echo [%date% %time%] ERROR: La app no se cerro tras 10 intentos >> "%LOG%"
+        goto :ERROR
+    )
+    timeout /t 2 /nobreak >nul
+    goto :WAIT_LOOP
+)
+
+:: Crear backup del ejecutable actual
+echo Creando backup...
+echo [%date% %time%] Creando backup de "%CURRENT%" >> "%LOG%"
+copy /Y "%CURRENT%" "%BACKUP%" >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [%date% %time%] ERROR: No se pudo crear backup >> "%LOG%"
+    goto :ERROR
+)
+
+:: Reemplazar ejecutable
+echo Instalando nueva version...
+echo [%date% %time%] Reemplazando ejecutable... >> "%LOG%"
+copy /Y "%NEW%" "%CURRENT%" >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo [%date% %time%] ERROR: No se pudo copiar el nuevo ejecutable >> "%LOG%"
+    echo [%date% %time%] Restaurando backup... >> "%LOG%"
+    copy /Y "%BACKUP%" "%CURRENT%" >nul 2>&1
+    goto :ERROR
+)
+
+:: Verificar que el nuevo ejecutable existe y no esta vacio
+if not exist "%CURRENT%" (
+    echo [%date% %time%] ERROR: El ejecutable no existe tras la copia >> "%LOG%"
+    copy /Y "%BACKUP%" "%CURRENT%" >nul 2>&1
+    goto :ERROR
+)
+
+:: Iniciar nueva version
+echo Iniciando nueva version...
+echo [%date% %time%] Iniciando nueva version... >> "%LOG%"
+start "" "%CURRENT%"
+if %ERRORLEVEL% NEQ 0 (
+    echo [%date% %time%] ERROR: No se pudo iniciar la nueva version >> "%LOG%"
+    echo [%date% %time%] Restaurando backup... >> "%LOG%"
+    copy /Y "%BACKUP%" "%CURRENT%" >nul 2>&1
+    start "" "%CURRENT%"
+    goto :ERROR
+)
+
+:: Limpieza
+echo [%date% %time%] Actualizacion completada exitosamente >> "%LOG%"
+del "%NEW%" >nul 2>&1
+del "%BACKUP%" >nul 2>&1
+timeout /t 5 /nobreak >nul
 del "%~f0"
+exit /b 0
+
+:ERROR
+echo [%date% %time%] Actualizacion fallida. Revisa el log: %LOG% >> "%LOG%"
+del "%NEW%" >nul 2>&1
+timeout /t 5 /nobreak >nul
+del "%~f0"
+exit /b 1
 """)
 
         subprocess.Popen(

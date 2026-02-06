@@ -1172,12 +1172,13 @@ class YouTubeMusicDownloader:
             
             if update_file:
                 self.progress['value'] = 100
-                self.update_status("✅ Descarga completa, instalando...")
+                self.update_status("Descarga completa, instalando...")
                 
                 response = messagebox.askyesno(
                     "Instalar Actualización",
                     "La actualización se ha descargado correctamente.\n\n" +
                     "La aplicación se cerrará y se actualizará automáticamente.\n" +
+                    "Si algo falla, se restaurará la versión anterior.\n" +
                     "¿Continuar?"
                 )
                 
@@ -1187,10 +1188,24 @@ class YouTubeMusicDownloader:
                         # Cerrar la aplicación (el script de actualización la reiniciará)
                         self.root.quit()
                     else:
-                        messagebox.showerror("Error", "No se pudo instalar la actualización")
+                        messagebox.showerror(
+                            "Error de Actualización",
+                            "No se pudo instalar la actualización.\n\n" +
+                            "El archivo descargado puede estar corrupto.\n" +
+                            "Intenta descargar la última versión manualmente desde:\n" +
+                            f"github.com/{REPO_OWNER}/{REPO_NAME}/releases"
+                        )
                         self.update_status("Listo para descargar")
             else:
-                messagebox.showerror("Error", "No se pudo descargar la actualización")
+                messagebox.showerror(
+                    "Error de Descarga",
+                    "No se pudo descargar la actualización.\n\n" +
+                    "Posibles causas:\n" +
+                    "- Conexión a internet inestable\n" +
+                    "- El archivo está corrupto en el servidor\n\n" +
+                    "Intenta de nuevo más tarde o descarga manualmente desde:\n" +
+                    f"github.com/{REPO_OWNER}/{REPO_NAME}/releases"
+                )
                 self.update_status("Listo para descargar")
                 
         except Exception as e:
