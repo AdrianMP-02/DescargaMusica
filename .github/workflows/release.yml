@@ -15,8 +15,8 @@ name: Build & Release
 on:
   push:
     tags:
-      - "v*"          # Se activa con tags tipo v1.0.0, v2.3.1, etc.
-  workflow_dispatch:   # Permite ejecución manual desde GitHub
+      - "v*" # Se activa con tags tipo v1.0.0, v2.3.1, etc.
+  workflow_dispatch: # Permite ejecución manual desde GitHub
     inputs:
       version:
         description: "Versión a publicar (ej: 1.2.0)"
@@ -28,7 +28,7 @@ on:
         type: string
 
 permissions:
-  contents: write      # Necesario para crear Releases
+  contents: write # Necesario para crear Releases
 
 jobs:
   build:
@@ -82,23 +82,25 @@ jobs:
       # -------------------------------------------------------
       - name: Actualizar versión en código
         shell: python
+        env:
+          PYTHONIOENCODING: utf-8
         run: |
           import re
           version = "${{ steps.version.outputs.version }}"
-          
+
           with open("updater.py", "r", encoding="utf-8") as f:
               content = f.read()
-          
+
           content = re.sub(
               r'CURRENT_VERSION\s*=\s*"[^"]*"',
               f'CURRENT_VERSION = "{version}"',
               content
           )
-          
+
           with open("updater.py", "w", encoding="utf-8") as f:
               f.write(content)
-          
-          print(f"✅ Versión actualizada a {version} en updater.py")
+
+          print(f"Version actualizada a {version} en updater.py")
 
       # -------------------------------------------------------
       # 6. Build con PyInstaller
