@@ -12,11 +12,15 @@ from pathlib import Path
 
 # Importar sistema de actualización
 try:
-    from updater import UpdateChecker, CURRENT_VERSION, REPO_OWNER, REPO_NAME
+    from updater import (
+        UpdateChecker, YtDlpUpdater,
+        CURRENT_VERSION, REPO_OWNER, REPO_NAME,
+    )
     UPDATER_AVAILABLE = True
 except ImportError:
     UPDATER_AVAILABLE = False
-    CURRENT_VERSION = "1.0"
+    CURRENT_VERSION = "1.0.0"
+    YtDlpUpdater = None
 
 class YouTubeMusicDownloader:
     def __init__(self, root):
@@ -247,9 +251,20 @@ class YouTubeMusicDownloader:
                                    command=self.check_updates, style='Simple.TButton')
             update_btn.pack(side=tk.LEFT)
             
-            self.version_label = ttk.Label(update_frame, text=f"v{CURRENT_VERSION}", 
-                                          style='Instruction.TLabel')
+            ytdlp_btn = ttk.Button(update_frame, text="⬆ Actualizar yt-dlp",
+                                   command=self.update_ytdlp_ui, style='Simple.TButton')
+            ytdlp_btn.pack(side=tk.LEFT, padx=(10, 0))
+            
+            ytdlp_ver = YtDlpUpdater.get_installed_version() if YtDlpUpdater else '?'
+            self.version_label = ttk.Label(
+                update_frame,
+                text=f"App v{CURRENT_VERSION}  |  yt-dlp {ytdlp_ver}",
+                style='Instruction.TLabel',
+            )
             self.version_label.pack(side=tk.RIGHT, padx=(10, 0))
+            
+            # Verificar actualizaciones en segundo plano al iniciar
+            self.root.after(2000, self._startup_update_check)
         
     def select_download_path(self):
         folder = filedialog.askdirectory(initialdir=self.download_path.get())
@@ -902,30 +917,66 @@ class YouTubeMusicDownloader:
             
         except Exception as e:
             error_msg = str(e)
-            
+
             # Manejo específico de errores de FFmpeg
             if "ffmpeg" in error_msg.lower() or "ffprobe" in error_msg.lower():
                 self.update_status("Error: FFmpeg no encontrado")
-                response = messagebox.askyesno("Error FFmpeg", 
-                    "FFmpeg no está instalado o no se encuentra.\n\n" +
-                    "¿Quieres descargar sin conversión a MP3?\n" +
+                response = messagebox.askyesno("Error FFmpeg",
+                    "FFmpeg no está instalado o no se encuentra.\n\n"
+                    "¿Quieres descargar sin conversión a MP3?\n"
                     "(Se descargará en formato original)")
-                
+
                 if response:
-                    # Reintentar sin conversión
                     self.use_conversion.set(False)
                     self.download_audio(url)
                     return
                 else:
-                    messagebox.showinfo("Instalación FFmpeg", 
-                        "Para instalar FFmpeg:\n\n" +
-                        "1. Haz clic en 'Instalar FFmpeg'\n" +
-                        "2. O descarga desde: https://ffmpeg.org/download.html\n" +
+                    messagebox.showinfo("Instalación FFmpeg",
+                        "Para instalar FFmpeg:\n\n"
+                        "1. Haz clic en 'Instalar FFmpeg'\n"
+                        "2. O descarga desde: https://ffmpeg.org/download.html\n"
                         "3. Agrega FFmpeg al PATH del sistema")
+
+            # Errores comunes de yt-dlp (video no disponible, extractor roto, etc.)
+            elif any(kw in error_msg.lower() for kw in [
+                "unable to extract", "video unavailable", "sign in",
+                "http error", "urlopen error", "blocked",
+                "no video formats", "unsupported url",
+                "this video is not available", "private video",
+            ]):
+                self.update_status("Error de extracción")
+                should_update = messagebox.askyesno(
+                    "Error de descarga",
+                    f"No se pudo descargar el video.\n\n"
+                    f"Error: {error_msg[:200]}\n\n"
+                    f"Esto suele ocurrir cuando yt-dlp necesita actualizarse\n"
+                    f"porque YouTube cambió su sistema.\n\n"
+                    f"¿Actualizar yt-dlp e intentar de nuevo?"
+                )
+                if should_update and YtDlpUpdater:
+                    self.update_status("⬆ Actualizando yt-dlp...")
+                    result = YtDlpUpdater.update(
+                        progress_callback=lambda msg: self.update_status(msg)
+                    )
+                    if result["success"]:
+                        messagebox.showinfo(
+                            "yt-dlp Actualizado",
+                            f"yt-dlp actualizado a {result['new_version']}.\n"
+                            f"Reintentando descarga...",
+                        )
+                        self.version_label.config(
+                            text=f"App v{CURRENT_VERSION}  |  yt-dlp {result['new_version']}"
+                        )
+                        # Reintentar descarga
+                        self.download_audio(url, single_video)
+                        return
+                    else:
+                        messagebox.showerror("Error",
+                            f"No se pudo actualizar yt-dlp:\n{result.get('error', '')}")
             else:
                 self.update_status("Error en la descarga")
                 messagebox.showerror("Error", f"Error durante la descarga: {error_msg}")
-        
+
         finally:
             self.progress.stop()
             self.download_btn.config(state=tk.NORMAL)
@@ -972,48 +1023,126 @@ class YouTubeMusicDownloader:
         
         return True  # Por defecto, solo el video
     
+    # ----------------------------------------------------------
+    # Auto-update yt-dlp
+    # ----------------------------------------------------------
+    def update_ytdlp_ui(self):
+        """Actualiza yt-dlp desde la interfaz"""
+        if not YtDlpUpdater:
+            messagebox.showinfo("No disponible", "El módulo de actualización no está configurado")
+            return
+
+        def do_update():
+            try:
+                self.update_status("⬆ Actualizando yt-dlp...")
+                result = YtDlpUpdater.update(
+                    progress_callback=lambda msg: self.update_status(msg)
+                )
+                if result["success"]:
+                    msg = (
+                        f"✅ yt-dlp actualizado\n\n"
+                        f"Anterior: {result['old_version']}\n"
+                        f"Nueva:    {result['new_version']}"
+                    )
+                    messagebox.showinfo("yt-dlp Actualizado", msg)
+                    # Actualizar label
+                    self.version_label.config(
+                        text=f"App v{CURRENT_VERSION}  |  yt-dlp {result['new_version']}"
+                    )
+                else:
+                    messagebox.showerror("Error", f"No se pudo actualizar yt-dlp:\n{result.get('error', 'Desconocido')}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Error actualizando yt-dlp:\n{str(e)}")
+            finally:
+                self.update_status("Listo para descargar")
+
+        threading.Thread(target=do_update, daemon=True).start()
+
+    # ----------------------------------------------------------
+    # Verificación automática al inicio
+    # ----------------------------------------------------------
+    def _startup_update_check(self):
+        """Ejecuta verificaciones de actualización en segundo plano al iniciar la app"""
+        def check():
+            try:
+                # 1. Verificar si yt-dlp necesita actualización
+                if YtDlpUpdater and YtDlpUpdater.needs_update():
+                    installed = YtDlpUpdater.get_installed_version()
+                    latest = YtDlpUpdater.get_latest_version()
+                    response = messagebox.askyesno(
+                        "⬆ Actualización de yt-dlp",
+                        f"Hay una nueva versión de yt-dlp disponible.\n\n"
+                        f"Instalada: {installed}\n"
+                        f"Disponible: {latest}\n\n"
+                        f"yt-dlp es el motor de descarga. Actualizarlo\n"
+                        f"corrige problemas de descarga de YouTube.\n\n"
+                        f"¿Actualizar ahora?"
+                    )
+                    if response:
+                        self.update_ytdlp_ui()
+
+                # 2. Verificar si hay nueva versión de la app
+                checker = UpdateChecker(REPO_OWNER, REPO_NAME, CURRENT_VERSION)
+                update_info = checker.check_for_updates()
+                if update_info.get("available"):
+                    response = messagebox.askyesno(
+                        "✨ Actualización Disponible",
+                        f"¡Nueva versión de la app disponible!\n\n"
+                        f"Actual: v{update_info['current_version']}\n"
+                        f"Nueva:  v{update_info['version']}\n\n"
+                        f"¿Descargar e instalar?"
+                    )
+                    if response:
+                        self.download_and_install_update(checker, update_info)
+            except Exception:
+                pass  # No interrumpir la app por errores de verificación
+
+        threading.Thread(target=check, daemon=True).start()
+
+    # ----------------------------------------------------------
+    # Verificar actualizaciones (botón manual)
+    # ----------------------------------------------------------
     def check_updates(self):
         """Verifica si hay actualizaciones disponibles"""
         if not UPDATER_AVAILABLE:
-            messagebox.showinfo("Actualizador no disponible", 
+            messagebox.showinfo("Actualizador no disponible",
                               "El módulo de actualización no está configurado")
             return
-        
+
         def check_in_thread():
             try:
                 self.update_status("🔍 Verificando actualizaciones...")
-                
+
                 checker = UpdateChecker(REPO_OWNER, REPO_NAME, CURRENT_VERSION)
                 update_info = checker.check_for_updates()
-                
+
                 if update_info.get('error'):
-                    messagebox.showerror("Error", 
+                    messagebox.showerror("Error",
                                        f"No se pudo verificar actualizaciones:\n{update_info['error']}")
                     self.update_status("Listo para descargar")
-                    
+
                 elif update_info.get('available'):
-                    # Hay actualización disponible
                     response = messagebox.askyesno(
                         "✨ Actualización Disponible",
-                        f"¡Nueva versión disponible!\n\n" +
-                        f"Versión actual: {update_info['current_version']}\n" +
-                        f"Nueva versión: {update_info['version']}\n\n" +
+                        f"¡Nueva versión disponible!\n\n"
+                        f"Versión actual: {update_info['current_version']}\n"
+                        f"Nueva versión: {update_info['version']}\n\n"
                         f"¿Deseas descargar e instalar la actualización?"
                     )
-                    
+
                     if response:
                         self.download_and_install_update(checker, update_info)
                     else:
                         self.update_status("Listo para descargar")
                 else:
-                    messagebox.showinfo("Sin Actualizaciones", 
+                    messagebox.showinfo("Sin Actualizaciones",
                                       f"✅ Ya tienes la última versión ({CURRENT_VERSION})")
                     self.update_status("Listo para descargar")
-                    
+
             except Exception as e:
                 messagebox.showerror("Error", f"Error verificando actualizaciones:\n{str(e)}")
                 self.update_status("Listo para descargar")
-        
+
         thread = threading.Thread(target=check_in_thread)
         thread.daemon = True
         thread.start()

@@ -1,0 +1,164 @@
+# =============================================================
+# GitHub Actions: Build & Release automático
+# =============================================================
+# Se ejecuta cuando:
+#   1. Se hace push de un tag con formato v* (ej: v1.0.0, v1.2.3)
+#   2. Se dispara manualmente desde la pestaña "Actions" de GitHub
+#
+# Uso rápido:
+#   git tag v1.1.0
+#   git push origin v1.1.0
+# =============================================================
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - "v*"          # Se activa con tags tipo v1.0.0, v2.3.1, etc.
+  workflow_dispatch:   # Permite ejecución manual desde GitHub
+    inputs:
+      version:
+        description: "Versión a publicar (ej: 1.2.0)"
+        required: true
+        type: string
+      release_notes:
+        description: "Notas del release (opcional, se auto-generan si se deja vacío)"
+        required: false
+        type: string
+
+permissions:
+  contents: write      # Necesario para crear Releases
+
+jobs:
+  build:
+    name: Build ejecutable Windows
+    runs-on: windows-latest
+
+    steps:
+      # -------------------------------------------------------
+      # 1. Checkout del código
+      # -------------------------------------------------------
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      # -------------------------------------------------------
+      # 2. Configurar Python
+      # -------------------------------------------------------
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      # -------------------------------------------------------
+      # 3. Instalar dependencias
+      # -------------------------------------------------------
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # -------------------------------------------------------
+      # 4. Determinar versión
+      # -------------------------------------------------------
+      - name: Determinar versión
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            # Extraer versión del tag (quitar prefijo 'v')
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Versión: $VERSION"
+
+      # -------------------------------------------------------
+      # 5. Actualizar versión en updater.py
+      # -------------------------------------------------------
+      - name: Actualizar versión en código
+        shell: python
+        run: |
+          import re
+          version = "${{ steps.version.outputs.version }}"
+          
+          with open("updater.py", "r", encoding="utf-8") as f:
+              content = f.read()
+          
+          content = re.sub(
+              r'CURRENT_VERSION\s*=\s*"[^"]*"',
+              f'CURRENT_VERSION = "{version}"',
+              content
+          )
+          
+          with open("updater.py", "w", encoding="utf-8") as f:
+              f.write(content)
+          
+          print(f"✅ Versión actualizada a {version} en updater.py")
+
+      # -------------------------------------------------------
+      # 6. Build con PyInstaller
+      # -------------------------------------------------------
+      - name: Compilar ejecutable
+        run: |
+          pyinstaller DescargadorMusica.spec
+          echo "✅ Ejecutable compilado"
+
+      # -------------------------------------------------------
+      # 7. Verificar que el ejecutable existe
+      # -------------------------------------------------------
+      - name: Verificar ejecutable
+        run: |
+          if (Test-Path "dist/DescargadorMusica.exe") {
+            $size = (Get-Item "dist/DescargadorMusica.exe").Length / 1MB
+            Write-Output "✅ DescargadorMusica.exe ($([math]::Round($size, 2)) MB)"
+          } else {
+            Write-Error "❌ No se encontró el ejecutable"
+            exit 1
+          }
+
+      # -------------------------------------------------------
+      # 8. Crear tag si fue dispatch manual
+      # -------------------------------------------------------
+      - name: Crear tag (si es dispatch manual)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag ${{ steps.version.outputs.tag }}
+          git push origin ${{ steps.version.outputs.tag }}
+
+      # -------------------------------------------------------
+      # 9. Crear Release en GitHub
+      # -------------------------------------------------------
+      - name: Crear Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Descargador de Música v${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+          body: |
+            ## 🎵 Descargador de Música v${{ steps.version.outputs.version }}
+
+            ### Instalación
+            1. Descarga **DescargadorMusica.exe** de los archivos adjuntos
+            2. Ejecútalo directamente (no necesita instalación)
+
+            ${{ github.event.inputs.release_notes || '' }}
+
+            ### Requisitos
+            - Windows 10 o superior
+            - Conexión a Internet
+
+            ---
+            *Build automático · GitHub Actions*
+          files: |
+            dist/DescargadorMusica.exe
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
