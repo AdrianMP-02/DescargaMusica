@@ -1215,6 +1215,13 @@ class YouTubeMusicDownloader:
             self.progress.configure(mode='indeterminate')
 
 def main():
+    # Limpiar exe antiguo de una actualización previa
+    if UPDATER_AVAILABLE:
+        try:
+            UpdateChecker.cleanup_old_exe()
+        except Exception:
+            pass
+
     root = tk.Tk()
     
     # Configurar icono de ventana (opcional)

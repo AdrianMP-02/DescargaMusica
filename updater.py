@@ -291,119 +291,133 @@ class UpdateChecker:
             return False
 
     def _install_exe_update(self, update_file):
-        """Instala actualización en modo ejecutable (.exe) con backup y rollback"""
-        current_exe = sys.executable
-        update_dir = Path(update_file).parent
-        updater_script = update_dir / "do_update.bat"
-        log_file = update_dir / "update_log.txt"
-        backup_exe = update_dir / "DescargadorMusica_backup.exe"
-
-        # Verificar que el archivo descargado existe y tiene tamaño razonable (>1MB)
+        """
+        Instala actualización en modo ejecutable (.exe) usando rename trick.
+        
+        Windows permite renombrar un .exe que está en ejecución, aunque no
+        permite borrarlo ni sobreescribirlo. Aprovechamos esto para:
+        1. Renombrar el exe actual → _old.exe
+        2. Copiar el nuevo exe → nombre original
+        3. Lanzar el nuevo exe
+        4. Cerrar la app actual
+        Al siguiente inicio, se limpia el _old.exe.
+        """
+        current_exe = Path(sys.executable)
         update_path = Path(update_file)
+        old_exe = current_exe.with_name(current_exe.stem + "_old" + current_exe.suffix)
+
+        # --- Validaciones previas ---
         if not update_path.exists():
             print("Error: archivo de actualización no encontrado")
             return False
 
         file_size = update_path.stat().st_size
-        if file_size < 1_000_000:  # Menor a 1MB = probablemente corrupto
+        if file_size < 1_000_000:
             print(f"Error: archivo de actualización muy pequeño ({file_size} bytes)")
-            try:
-                update_path.unlink()
-            except OSError:
-                pass
+            update_path.unlink(missing_ok=True)
             return False
 
-        with open(updater_script, "w", encoding="utf-8") as f:
-            f.write(f"""@echo off
-chcp 65001 >nul
-set "LOG={log_file}"
-set "CURRENT={current_exe}"
-set "NEW={update_file}"
-set "BACKUP={backup_exe}"
+        # Validar que es un ejecutable PE válido (header MZ)
+        if not self._validate_exe_header(update_path):
+            print("Error: el archivo descargado no es un ejecutable válido")
+            update_path.unlink(missing_ok=True)
+            return False
 
-echo [%date% %time%] Iniciando actualizacion... > "%LOG%"
+        # --- Proceso de actualización ---
+        try:
+            # Paso 1: Eliminar _old.exe de una actualización anterior si existe
+            if old_exe.exists():
+                try:
+                    old_exe.unlink()
+                except OSError:
+                    # Si no se puede borrar, intentar con otro nombre
+                    old_exe = current_exe.with_name(
+                        current_exe.stem + "_old2" + current_exe.suffix
+                    )
 
-:: Esperar a que la app se cierre
-echo Esperando cierre de la aplicacion...
-echo [%date% %time%] Esperando cierre de app... >> "%LOG%"
-timeout /t 4 /nobreak >nul
+            # Paso 2: Renombrar el exe actual → _old.exe
+            # Windows permite renombrar un exe en ejecución
+            os.rename(str(current_exe), str(old_exe))
 
-:: Intentar hasta 10 veces (por si tarda en cerrarse)
-set RETRY=0
-:WAIT_LOOP
-tasklist /FI "PID eq {os.getpid()}" 2>nul | find /I "DescargadorMusica" >nul
-if %ERRORLEVEL%==0 (
-    set /A RETRY+=1
-    if %RETRY% GEQ 10 (
-        echo [%date% %time%] ERROR: La app no se cerro tras 10 intentos >> "%LOG%"
-        goto :ERROR
-    )
-    timeout /t 2 /nobreak >nul
-    goto :WAIT_LOOP
-)
+            # Paso 3: Copiar el nuevo exe al nombre original
+            shutil.copy2(str(update_path), str(current_exe))
 
-:: Crear backup del ejecutable actual
-echo Creando backup...
-echo [%date% %time%] Creando backup de "%CURRENT%" >> "%LOG%"
-copy /Y "%CURRENT%" "%BACKUP%" >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [%date% %time%] ERROR: No se pudo crear backup >> "%LOG%"
-    goto :ERROR
-)
+            # Paso 4: Verificar que la copia fue exitosa
+            if not current_exe.exists() or current_exe.stat().st_size < 1_000_000:
+                # Rollback: restaurar el exe original
+                print("Error: la copia del nuevo exe falló, restaurando...")
+                if current_exe.exists():
+                    current_exe.unlink()
+                os.rename(str(old_exe), str(current_exe))
+                return False
 
-:: Reemplazar ejecutable
-echo Instalando nueva version...
-echo [%date% %time%] Reemplazando ejecutable... >> "%LOG%"
-copy /Y "%NEW%" "%CURRENT%" >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo [%date% %time%] ERROR: No se pudo copiar el nuevo ejecutable >> "%LOG%"
-    echo [%date% %time%] Restaurando backup... >> "%LOG%"
-    copy /Y "%BACKUP%" "%CURRENT%" >nul 2>&1
-    goto :ERROR
-)
+            # Paso 5: Lanzar el nuevo exe
+            subprocess.Popen(
+                [str(current_exe)],
+                creationflags=subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                if hasattr(subprocess, "DETACHED_PROCESS")
+                else 0,
+            )
 
-:: Verificar que el nuevo ejecutable existe y no esta vacio
-if not exist "%CURRENT%" (
-    echo [%date% %time%] ERROR: El ejecutable no existe tras la copia >> "%LOG%"
-    copy /Y "%BACKUP%" "%CURRENT%" >nul 2>&1
-    goto :ERROR
-)
+            # Paso 6: Limpiar archivo descargado
+            update_path.unlink(missing_ok=True)
 
-:: Iniciar nueva version
-echo Iniciando nueva version...
-echo [%date% %time%] Iniciando nueva version... >> "%LOG%"
-start "" "%CURRENT%"
-if %ERRORLEVEL% NEQ 0 (
-    echo [%date% %time%] ERROR: No se pudo iniciar la nueva version >> "%LOG%"
-    echo [%date% %time%] Restaurando backup... >> "%LOG%"
-    copy /Y "%BACKUP%" "%CURRENT%" >nul 2>&1
-    start "" "%CURRENT%"
-    goto :ERROR
-)
+            return True
 
-:: Limpieza
-echo [%date% %time%] Actualizacion completada exitosamente >> "%LOG%"
-del "%NEW%" >nul 2>&1
-del "%BACKUP%" >nul 2>&1
-timeout /t 5 /nobreak >nul
-del "%~f0"
-exit /b 0
+        except PermissionError as e:
+            print(f"Error de permisos durante actualización: {e}")
+            # Intentar rollback si el rename ya se hizo
+            if old_exe.exists() and not current_exe.exists():
+                try:
+                    os.rename(str(old_exe), str(current_exe))
+                except OSError:
+                    pass
+            return False
+        except Exception as e:
+            print(f"Error durante actualización: {e}")
+            # Intentar rollback
+            if old_exe.exists() and not current_exe.exists():
+                try:
+                    os.rename(str(old_exe), str(current_exe))
+                except OSError:
+                    pass
+            return False
 
-:ERROR
-echo [%date% %time%] Actualizacion fallida. Revisa el log: %LOG% >> "%LOG%"
-del "%NEW%" >nul 2>&1
-timeout /t 5 /nobreak >nul
-del "%~f0"
-exit /b 1
-""")
+    @staticmethod
+    def _validate_exe_header(exe_path):
+        """Verifica que un archivo tiene header MZ válido (ejecutable PE de Windows)"""
+        try:
+            with open(exe_path, "rb") as f:
+                header = f.read(2)
+                return header == b"MZ"
+        except Exception:
+            return False
 
-        subprocess.Popen(
-            ["cmd.exe", "/c", str(updater_script)],
-            creationflags=subprocess.CREATE_NO_WINDOW
-            if hasattr(subprocess, "CREATE_NO_WINDOW")
-            else 0,
-        )
-        return True
+    @staticmethod
+    def cleanup_old_exe():
+        """
+        Limpia el exe antiguo tras una actualización exitosa.
+        Llamar al inicio de la app.
+        """
+        if not getattr(sys, "frozen", False):
+            return
+
+        current_exe = Path(sys.executable)
+        exe_dir = current_exe.parent
+
+        # Buscar y eliminar archivos _old*.exe
+        for old_file in exe_dir.glob(f"{current_exe.stem.replace('_old', '').replace('_old2', '')}*_old*.exe"):
+            try:
+                # Esperar un momento para que el proceso anterior termine
+                time.sleep(1)
+                old_file.unlink()
+                print(f"Limpieza: eliminado {old_file.name}")
+            except PermissionError:
+                # El proceso anterior aún existe, intentar más tarde
+                print(f"Limpieza: {old_file.name} aún en uso, se eliminará después")
+            except Exception as e:
+                print(f"Limpieza: error eliminando {old_file.name}: {e}")
 
     def _install_source_update(self, update_file):
         """Instala actualización en modo script (código fuente)"""
